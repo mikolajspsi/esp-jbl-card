@@ -31,6 +31,10 @@ const ENTITIES = {
   heap: ["sensor", "wolny_ram"],
   psram: ["sensor", "wolny_psram"],
   cache: ["sensor", "cache_mp3"],
+  playlists: ["sensor", "playlisty"],
+  playlist_now: ["sensor", "playlista_teraz"],
+  shuffle: ["switch", "losowo"],
+  next: ["button", "nastepny"],
 };
 
 const BAD = ["unavailable", "unknown", "none", ""];
@@ -78,6 +82,12 @@ class EspJblCard extends HTMLElement {
 
   call(domain, service, key, data = {}) {
     return this._hass.callService(domain, service, { entity_id: this.id(key), ...data });
+  }
+
+  // komendy playlist ida bezposrednio przez MQTT (topic_prefix = DEVICE_ID z firmware)
+  mqtt(topic, payload = "") {
+    const prefix = this.config.topic_prefix || this.config.entity_prefix;
+    return this._hass.callService("mqtt", "publish", { topic: `${prefix}/${topic}`, payload: String(payload) });
   }
 
   press(key) {
@@ -128,6 +138,14 @@ class EspJblCard extends HTMLElement {
         setMac: (mac) => text("bt_mac", mac),
         sdSync: () => this.press("sd_sync"),
         sdFormatPress: () => this.press("sd_format"),
+        playPlaylist: (name) => this.mqtt("playlist/play", name),
+        next: () => this.press("next"),
+        setShuffle: (on) => this.call("switch", on ? "turn_on" : "turn_off", "shuffle"),
+        createPlaylist: (name) => this.mqtt("playlist/create", name),
+        addToPlaylist: (pl, sound) => this.mqtt("playlist/add", `${pl}|${sound}`),
+        removeFromPlaylist: (pl, i) => this.mqtt("playlist/remove", `${pl}|${i + 1}`),
+        movePlaylistItem: (pl, from, to) => this.mqtt("playlist/move", `${pl}|${from + 1}|${to + 1}`),
+        deletePlaylist: (name) => this.mqtt("playlist/delete", name),
       },
     });
   }
@@ -155,6 +173,9 @@ class EspJblCard extends HTMLElement {
     const selected = this.val("select");
     const message = this.val("message");
     const mac = this.val("bt_mac");
+    // "straszne 2/5" albo "brak"
+    const plNowM = this.val("playlist_now").match(/^(.*) (\d+)\/(\d+)$/);
+    const plSt = this.st("playlists");
 
     this.view.setModel({
       offline,
@@ -180,6 +201,11 @@ class EspJblCard extends HTMLElement {
       heap: this.num("heap"),
       psram: this.num("psram"),
       cache: this.num("cache"),
+      playlists: (plSt && Array.isArray(plSt.attributes.playlists)) ? plSt.attributes.playlists : [],
+      playlist: plNowM ? plNowM[1] : "",
+      plPos: plNowM ? Number(plNowM[2]) : 0,
+      plLen: plNowM ? Number(plNowM[3]) : 0,
+      shuffle: this.val("shuffle") === "on",
     });
   }
 }

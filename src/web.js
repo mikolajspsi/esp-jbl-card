@@ -38,6 +38,14 @@ const view = new EspJblView(root, {
     setMac: (mac) => cmd("bt/mac/set", mac),
     sdSync: () => cmd("sd/sync"),
     sdFormatPress: () => cmd("sd/format"),
+    playPlaylist: (name) => cmd("playlist/play", name),
+    next: () => cmd("next"),
+    setShuffle: (on) => cmd("shuffle/set", on ? "ON" : "OFF"),
+    createPlaylist: (name) => cmd("playlist/create", name),
+    addToPlaylist: (pl, sound) => cmd("playlist/add", `${pl}|${sound}`),
+    removeFromPlaylist: (pl, i) => cmd("playlist/remove", `${pl}|${i + 1}`),
+    movePlaylistItem: (pl, from, to) => cmd("playlist/move", `${pl}|${from + 1}|${to + 1}`),
+    deletePlaylist: (name) => cmd("playlist/delete", name),
   },
 });
 
@@ -80,6 +88,11 @@ async function poll() {
       heap: s.heap,
       psram: s.psram,
       cache: s.cache,
+      playlists: s.playlists || [],
+      playlist: s.playlist || "",
+      plPos: s.pl_pos,
+      plLen: s.pl_len,
+      shuffle: s.shuffle,
     };
     const ip = document.getElementById("ip");
     if (ip) ip.textContent = (s.ip || location.host) + (s.mqtt ? "" : " · MQTT offline");

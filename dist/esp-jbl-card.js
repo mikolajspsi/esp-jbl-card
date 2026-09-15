@@ -155,8 +155,9 @@ class EspJblView {
     this.icon = icon;
     this.h = handlers;
     this.m = null;
-    this.ui = { tab: "all", btOpen: false, sdOpen: false, confirmDelete: false, armedUntil: 0, cols: 1, dark: false };
-    this.draft = { url: "", name: "", newUrl: "", mac: null, type: "auto" };
+    this.ui = { tab: "all", btOpen: false, sdOpen: false, confirmDelete: false, armedUntil: 0, cols: 1, dark: false,
+      plOpen: "", plConfirm: false, sheet: "", sheetPl: "" };
+    this.draft = { url: "", name: "", newUrl: "", mac: null, type: "auto", plName: "", plAdd: "", sheetNew: "" };
     this.lastHtml = "";
     this.pending = false;
     this.busy = new Set();
@@ -204,6 +205,18 @@ class EspJblView {
     this.m = m;
     if (this.draft.mac === null && m && m.mac) this.draft.mac = m.mac;
     this.render();
+  }
+
+  // edytowana playlista (obiekt z modelu)
+  plEdited() {
+    return (this.m.playlists || []).find((p) => p.name === this.ui.plOpen);
+  }
+
+  // cel "Dodaj do playlisty" w menu dzwieku: ostatnio wybrana, pierwsza albo nowa
+  sheetPl() {
+    const lists = this.m.playlists || [];
+    if (this.ui.sheetPl === "__new__" || lists.some((p) => p.name === this.ui.sheetPl)) return this.ui.sheetPl;
+    return lists[0] ? lists[0].name : "__new__";
   }
 
   activeEl() {
@@ -275,7 +288,8 @@ class EspJblView {
     tile.addEventListener("pointerleave", cancel, { once: true });
     this.holdTimer = setTimeout(() => {
       this.held = true;
-      this.ui.confirmDelete = true;
+      this.ui.sheet = tile.dataset.sound; // menu: dodaj do playlisty / usun
+      this.ui.confirmDelete = false;
       const name = tile.dataset.sound;
       this.m.selected = name;
       this.run("select", () => this.h.selectSound(name));
@@ -342,6 +356,109 @@ class EspJblView {
         this.draft.type = t.dataset.type;
         this.render(true);
         break;
+      case "next":
+        this.run("next", () => this.h.next());
+        break;
+      case "shuffle":
+        m.shuffle = !m.shuffle;
+        this.render(true);
+        this.run("shuffle", () => this.h.setShuffle(m.shuffle));
+        break;
+      case "pl-open":
+        this.ui.plOpen = this.ui.plOpen === t.dataset.pl ? "" : t.dataset.pl;
+        this.ui.plConfirm = false;
+        this.render(true);
+        break;
+      case "pl-close":
+        this.ui.plOpen = "";
+        this.ui.plConfirm = false;
+        this.render(true);
+        break;
+      case "pl-play":
+        this.run("pl-play", () => this.h.playPlaylist(t.dataset.pl));
+        break;
+      case "pl-create": {
+        const name = this.draft.plName.trim();
+        if (!name) return;
+        if (!(m.playlists || []).some((p) => p.name === name)) m.playlists = [...(m.playlists || []), { name, items: [] }];
+        this.ui.plOpen = name;
+        this.draft.plName = "";
+        this.render(true);
+        this.run("pl-create", () => this.h.createPlaylist(name));
+        break;
+      }
+      case "pl-add": {
+        const pl = this.plEdited();
+        const sound = this.draft.plAdd || (m.sounds || [])[0];
+        if (!pl || !sound) return;
+        pl.items = [...pl.items, sound];
+        this.render(true);
+        this.run("pl-add", () => this.h.addToPlaylist(pl.name, sound));
+        break;
+      }
+      case "pl-rm": {
+        const pl = this.plEdited(), i = Number(t.dataset.i);
+        if (!pl) return;
+        pl.items = pl.items.filter((_, k) => k !== i);
+        this.render(true);
+        this.run("pl-rm", () => this.h.removeFromPlaylist(pl.name, i));
+        break;
+      }
+      case "pl-up":
+      case "pl-down": {
+        const pl = this.plEdited(), i = Number(t.dataset.i), to = act === "pl-up" ? i - 1 : i + 1;
+        if (!pl || to < 0 || to >= pl.items.length) return;
+        const items = [...pl.items];
+        [items[i], items[to]] = [items[to], items[i]];
+        pl.items = items;
+        this.render(true);
+        this.run("pl-move", () => this.h.movePlaylistItem(pl.name, i, to));
+        break;
+      }
+      case "pl-del":
+        this.ui.plConfirm = true;
+        this.render(true);
+        break;
+      case "pl-del-no":
+        this.ui.plConfirm = false;
+        this.render(true);
+        break;
+      case "pl-del-yes": {
+        const name = this.ui.plOpen;
+        m.playlists = (m.playlists || []).filter((p) => p.name !== name);
+        this.ui.plOpen = "";
+        this.ui.plConfirm = false;
+        this.render(true);
+        this.run("pl-del", () => this.h.deletePlaylist(name));
+        break;
+      }
+      case "sheet-close":
+        this.ui.sheet = "";
+        this.render(true);
+        break;
+      case "sheet-add": {
+        const target = this.sheetPl();
+        const pl = target === "__new__" ? this.draft.sheetNew.trim() : target;
+        const sound = this.ui.sheet;
+        if (!pl || !sound) return;
+        const lists = m.playlists || [];
+        const found = lists.find((p) => p.name === pl);
+        m.playlists = found ? lists.map((p) => (p === found ? { ...p, items: [...p.items, sound] } : p))
+          : [...lists, { name: pl, items: [sound] }];
+        this.ui.sheet = "";
+        this.ui.sheetPl = pl;
+        this.draft.sheetNew = "";
+        this.render(true);
+        this.run("sheet-add", () => this.h.addToPlaylist(pl, sound));
+        break;
+      }
+      case "sheet-del":
+        m.selected = this.ui.sheet;
+        this.ui.sheet = "";
+        this.ui.confirmDelete = true;
+        this.render(true);
+        this.run("select", () => this.h.selectSound(m.selected));
+        break;
       case "reset-bass":
         m.bass = 0;
         this.render(true);
@@ -393,6 +510,8 @@ class EspJblView {
     else if (k === "name") this.draft.name = t.value;
     else if (k === "newurl") this.draft.newUrl = t.value;
     else if (k === "mac") this.draft.mac = t.value;
+    else if (k === "plname") this.draft.plName = t.value;
+    else if (k === "sheet-new") this.draft.sheetNew = t.value;
     else if (t.type === "range") this.paintRange(t);
     if (k === "name" || k === "newurl") {
       const btn = this.host.querySelector('[data-act="save"]');
@@ -406,6 +525,8 @@ class EspJblView {
     if (k === "url") this.onClick({ target: this.host.querySelector('[data-act="playurl"]') });
     else if (k === "newurl" || k === "name") this.onClick({ target: this.host.querySelector('[data-act="save"]') });
     else if (k === "mac") e.target.blur();
+    else if (k === "plname") this.onClick({ target: this.host.querySelector('[data-act="pl-create"]') });
+    else if (k === "sheet-new") this.onClick({ target: this.host.querySelector('[data-act="sheet-add"]') });
   }
 
   onChange(e) {
@@ -434,6 +555,13 @@ class EspJblView {
         this.run("speaker", () => this.h.selectSpeaker(d.name, d.mac));
       }
       t.blur();
+    } else if (k === "pl-add") {
+      this.draft.plAdd = t.value;
+      t.blur();
+    } else if (k === "sheet-pl") {
+      this.ui.sheetPl = t.value;
+      t.blur();
+      this.render(true);
     } else if (k === "mac") {
       const mac = t.value.trim().toUpperCase();
       if (/^([0-9A-F]{2}[:-]){5}[0-9A-F]{2}$/.test(mac) && mac !== m.mac) this.run("mac", () => this.h.setMac(mac));
@@ -466,7 +594,44 @@ class EspJblView {
     const radioNow = playing && radioOf(m.playing);
     const ctl = bt ? "" : " disabled";
     const sounds = off ? [] : m.sounds || [];
+    const playlists = off ? [] : m.playlists || [];
     const radios = sounds.filter(radioOf).length;
+    const sheetPl = this.sheetPl();
+    const plEd = playlists.find((p) => p.name === ui.plOpen);
+    const plAdd = sounds.includes(this.draft.plAdd) ? this.draft.plAdd : sounds[0] || "";
+    const accentBtn = `style="border-color:var(--accent);background:var(--accent-soft);color:var(--accent)"`;
+    const editor = !plEd ? "" : `<div class="box">
+    <div class="row">
+      <span class="ell" style="font-size:13.5px;font-weight:700;display:inline-flex;align-items:center;gap:6px;min-width:0">${I("pencil-outline", 16, "var(--dim)")}${esc(plEd.name)}</span>
+      <span style="display:inline-flex;gap:6px;flex:0 0 auto">
+        <button class="reset${ctl}" data-act="pl-play" data-pl="${esc(plEd.name)}" aria-label="Odtwórz playlistę">${I("play", 18, "var(--accent)")}</button>
+        <button class="reset" data-act="pl-del" aria-label="Usuń playlistę">${I("trash-can-outline", 18, "var(--danger)")}</button>
+        <button class="reset" data-act="pl-close" aria-label="Zamknij">${I("close", 18)}</button>
+      </span>
+    </div>
+    ${ui.plConfirm ? `<div class="confirm"><div style="font-size:13px"><b>Usunąć playlistę „${esc(plEd.name)}”?</b> Dźwięki zostają.</div>
+      <div style="display:flex;gap:8px"><button class="btn2" data-act="pl-del-yes" style="background:var(--danger);color:#fff">Usuń</button>
+      <button class="btn2" data-act="pl-del-no" style="background:var(--card)">Anuluj</button></div></div>` : ""}
+    ${plEd.items.length ? plEd.items.map((it, i) => {
+      const r = radioOf(it), now = m.playlist === plEd.name && m.playing === it;
+      return `<div class="dev" style="padding:6px 8px;gap:8px${now ? ";border-color:var(--accent);background:var(--accent-soft)" : ""}">
+        <span class="mono" style="width:18px;text-align:right;font-size:11px;color:var(--dim)">${i + 1}</span>
+        ${I(r ? "radio-tower" : "ghost-outline", 17, r ? "var(--accent)" : "var(--ink)")}
+        <span class="ell" style="flex:1;min-width:0;font-size:13px;font-weight:600">${esc(pretty(it))}${sounds.includes(it) ? "" : ` <span style="color:var(--danger);font-weight:500">(brak)</span>`}</span>
+        <button class="reset${i === 0 ? " disabled" : ""}" data-act="pl-up" data-i="${i}" aria-label="W górę">${I("chevron-up", 18)}</button>
+        <button class="reset${i === plEd.items.length - 1 ? " disabled" : ""}" data-act="pl-down" data-i="${i}" aria-label="W dół">${I("chevron-down", 18)}</button>
+        <button class="reset" data-act="pl-rm" data-i="${i}" aria-label="Usuń z playlisty">${I("close", 18, "var(--danger)")}</button>
+      </div>`;
+    }).join("") : `<div style="font-size:12.5px;color:var(--dim)">Pusta playlista — dodaj dźwięki poniżej.</div>`}
+    <div style="display:flex;gap:8px;align-items:stretch">
+      <label class="field" style="flex:1;justify-content:space-between">
+        <span style="min-width:0;flex:1"><span class="label">Dodaj dźwięk</span>
+        <select data-key="pl-add">${sounds.map((n) => `<option value="${esc(n)}"${n === plAdd ? " selected" : ""}>${esc(n)}</option>`).join("") || "<option>brak dźwięków</option>"}</select></span>
+        ${I("menu-down", 20, "var(--dim)")}
+      </label>
+      <button class="trash" ${accentBtn} data-act="pl-add" aria-label="Dodaj do playlisty">${I("plus", 22)}</button>
+    </div>
+  </div>`;
     const shown = sounds.filter((n) => (ui.tab === "radio" ? radioOf(n) : ui.tab === "fx" ? !radioOf(n) : true));
     const devices = off ? [] : m.devices || [];
     const speaker = devices.find((d) => d.mac === m.mac);
@@ -481,6 +646,7 @@ class EspJblView {
       : [pretty(m.playing), "Efekt dźwiękowy", "flash"];
     else if (!bt) [nowSub, nowIcon] = ["Brak połączenia z głośnikiem", "bluetooth-off"];
     else if (m.sdBusy) nowSub = "Trwa pobieranie plików na kartę";
+    if (playing && m.playlist) nowSub = `Playlista: ${m.playlist} · ${m.plPos}/${m.plLen}`;
 
     const btText = off ? "brak danych" : bt ? (speaker ? speaker.name + " · połączony" : "połączony") : "rozłączony";
     const sdSummary = off ? DASH : !m.sdReady ? "brak karty" : m.sdBusy ? (m.sdPct >= 0 ? `pobieranie ${m.sdPct}%` : "pobieranie…") :
@@ -507,8 +673,12 @@ ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-wei
       </div>
     </div>
   </div>
-  <button class="stop${ctl}" data-act="stop" style="background:var(${playing ? "--accent" : "--chip"});color:var(${playing ? "--on-accent" : "--dim"});border:1px solid var(${playing ? "--accent" : "--divider"})">
-    ${I("stop-circle-outline", 24)}Stop</button>
+  <div style="display:flex;gap:8px">
+    <button class="stop${ctl}" data-act="stop" style="flex:1;background:var(${playing ? "--accent" : "--chip"});color:var(${playing ? "--on-accent" : "--dim"});border:1px solid var(${playing ? "--accent" : "--divider"})">
+      ${I("stop-circle-outline", 24)}Stop</button>
+    ${playing && m.playlist ? `<button class="stop${ctl}" data-act="next" aria-label="Następny" title="Następny"
+      style="flex:0 0 58px;width:58px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent)">${I("skip-next", 28)}</button>` : ""}
+  </div>
   <div class="${ctl}" style="display:grid;gap:8px">
     <div class="row">
       <span style="display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--dim);font-weight:500">${I("volume-medium", 18)}Głośność</span>
@@ -536,7 +706,7 @@ ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-wei
   </div>
   ${sounds.length ? `<div class="grid-s${ctl}">${shown.map((n) => {
       const r = radioOf(n), on = n === m.playing;
-      return `<button class="tile${on ? " on" : ""}" data-act="sound" data-sound="${esc(n)}" title="Przytrzymaj, aby usunąć">
+      return `<button class="tile${on ? " on" : ""}" data-act="sound" data-sound="${esc(n)}" title="Przytrzymaj: dodaj do playlisty / usuń">
         ${I(r ? "radio-tower" : "ghost-outline", 20, r ? "var(--accent)" : "var(--ink)")}
         <span style="min-width:0"><span class="t1 ell">${esc(pretty(n))}</span><span class="t2 mono ell">${esc(n)}</span></span></button>`;
     }).join("") || `<div style="font-size:12.5px;color:var(--dim);padding:6px 2px">Brak pozycji w tej kategorii.</div>`}</div>`
@@ -557,12 +727,55 @@ ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-wei
     </label>
     <button class="trash" data-act="trash" aria-label="Usuń wybrany">${I("trash-can-outline", 21)}</button>
   </div>
+  ${ui.sheet && !off ? `<div class="box" style="border:1px solid var(--divider)">
+    <div class="row"><b class="ell" style="font-size:14px">${esc(pretty(ui.sheet))}</b>
+      <button class="iconbtn" data-act="sheet-close" aria-label="Zamknij">${I("close", 20, "var(--dim)")}</button></div>
+    <div style="display:flex;gap:8px;align-items:stretch">
+      <label class="field" style="flex:1;justify-content:space-between">
+        <span style="min-width:0;flex:1"><span class="label">Dodaj do playlisty</span>
+        <select data-key="sheet-pl">${playlists.map((p) => `<option value="${esc(p.name)}"${p.name === sheetPl ? " selected" : ""}>${esc(p.name)} (${p.items.length})</option>`).join("")}
+          <option value="__new__"${sheetPl === "__new__" ? " selected" : ""}>+ nowa playlista…</option></select></span>
+        ${I("menu-down", 20, "var(--dim)")}
+      </label>
+      <button class="trash" ${accentBtn} data-act="sheet-add" aria-label="Dodaj do playlisty">${I("playlist-plus", 21)}</button>
+    </div>
+    ${sheetPl === "__new__" ? `<label class="field" style="display:block"><span class="label">Nazwa nowej playlisty</span>
+      <input data-key="sheet-new" maxlength="31" placeholder="np. straszne" value="${esc(this.draft.sheetNew)}"></label>` : ""}
+    <button class="btn2" data-act="sheet-del" style="background:var(--danger-soft);color:var(--danger);border:1px solid var(--danger-line)">Usuń dźwięk…</button>
+  </div>` : ""}
   ${ui.confirmDelete && m.selected ? `<div class="confirm">
     <div style="font-size:13.5px"><b>Usunąć „${esc(m.selected)}”?</b> Plik zostanie skasowany z karty SD.</div>
     <div style="display:flex;gap:8px">
       <button class="btn2" data-act="del-yes" style="background:var(--danger);color:#fff">Usuń</button>
       <button class="btn2" data-act="del-no" style="background:var(--chip)">Anuluj</button>
     </div></div>` : ""}
+</div>
+
+<div class="panel">
+  <div class="row">
+    <span class="title">${I("playlist-play", 20, "var(--accent)")}Playlisty</span>
+    <span class="chipbox">${off ? DASH : playlists.length + (playlists.length === 1 ? " playlista" : " playlist")}</span>
+  </div>
+  ${playlists.length ? `<div class="grid-s">${playlists.map((p) => {
+    const on = p.name === m.playlist, open = p.name === ui.plOpen;
+    return `<div class="tile${on || open ? " on" : ""}" style="padding:0;gap:0">
+      <button data-act="pl-open" data-pl="${esc(p.name)}" style="flex:1;min-width:0;display:flex;align-items:center;gap:9px;padding:9px 0 9px 11px;text-align:left">
+        ${I("playlist-music", 20, on ? "var(--accent)" : "var(--ink)")}
+        <span style="min-width:0"><span class="t1 ell">${esc(p.name)}</span>
+        <span class="t2 mono ell">${on ? `gra ${m.plPos}/${m.plLen}` : p.items.length + " poz."}</span></span></button>
+      <button class="iconbtn${ctl}" data-act="pl-play" data-pl="${esc(p.name)}" aria-label="Odtwórz playlistę" style="align-self:stretch;padding:0 11px">
+        ${I("play-circle", 26, "var(--accent)")}</button></div>`;
+  }).join("")}</div>` : off ? "" : `<div style="font-size:12.5px;color:var(--dim)">Brak playlist. Utwórz pierwszą poniżej albo przytrzymaj kafelek dźwięku.</div>`}
+  ${editor}
+  <div style="display:flex;gap:8px;align-items:stretch">
+    <label class="field" style="flex:1;display:block"><span class="label">Nowa playlista</span>
+      <input data-key="plname" maxlength="31" placeholder="np. straszne" value="${esc(this.draft.plName)}"></label>
+    <button class="trash${off ? " disabled" : ""}" ${accentBtn} data-act="pl-create" aria-label="Utwórz playlistę">${I("playlist-plus", 21)}</button>
+  </div>
+  <button class="toggle${off ? " disabled" : ""}" data-act="shuffle" role="switch" aria-checked="${!!m.shuffle}">
+    <span style="display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600">${I("shuffle-variant", 20, m.shuffle ? "var(--accent)" : "var(--dim)")}Losowa kolejność</span>
+    <span class="switch" style="background:var(${m.shuffle ? "--accent" : "--divider"})"><i style="left:${m.shuffle ? 23 : 3}px"></i></span>
+  </button>
 </div>
 
 <div class="panel" style="gap:10px">
@@ -700,7 +913,7 @@ function eqRow(key, label, v, off, I) {
 }
 
 
-const VERSION = "1.0.2";
+const VERSION = "1.1.0";
 
 // Klucz -> [domena, sufiks encji]. Identyfikator = domena.<prefix>_<sufiks>
 const ENTITIES = {
@@ -731,6 +944,10 @@ const ENTITIES = {
   heap: ["sensor", "wolny_ram"],
   psram: ["sensor", "wolny_psram"],
   cache: ["sensor", "cache_mp3"],
+  playlists: ["sensor", "playlisty"],
+  playlist_now: ["sensor", "playlista_teraz"],
+  shuffle: ["switch", "losowo"],
+  next: ["button", "nastepny"],
 };
 
 const BAD = ["unavailable", "unknown", "none", ""];
@@ -778,6 +995,12 @@ class EspJblCard extends HTMLElement {
 
   call(domain, service, key, data = {}) {
     return this._hass.callService(domain, service, { entity_id: this.id(key), ...data });
+  }
+
+  // komendy playlist ida bezposrednio przez MQTT (topic_prefix = DEVICE_ID z firmware)
+  mqtt(topic, payload = "") {
+    const prefix = this.config.topic_prefix || this.config.entity_prefix;
+    return this._hass.callService("mqtt", "publish", { topic: `${prefix}/${topic}`, payload: String(payload) });
   }
 
   press(key) {
@@ -828,6 +1051,14 @@ class EspJblCard extends HTMLElement {
         setMac: (mac) => text("bt_mac", mac),
         sdSync: () => this.press("sd_sync"),
         sdFormatPress: () => this.press("sd_format"),
+        playPlaylist: (name) => this.mqtt("playlist/play", name),
+        next: () => this.press("next"),
+        setShuffle: (on) => this.call("switch", on ? "turn_on" : "turn_off", "shuffle"),
+        createPlaylist: (name) => this.mqtt("playlist/create", name),
+        addToPlaylist: (pl, sound) => this.mqtt("playlist/add", `${pl}|${sound}`),
+        removeFromPlaylist: (pl, i) => this.mqtt("playlist/remove", `${pl}|${i + 1}`),
+        movePlaylistItem: (pl, from, to) => this.mqtt("playlist/move", `${pl}|${from + 1}|${to + 1}`),
+        deletePlaylist: (name) => this.mqtt("playlist/delete", name),
       },
     });
   }
@@ -855,6 +1086,9 @@ class EspJblCard extends HTMLElement {
     const selected = this.val("select");
     const message = this.val("message");
     const mac = this.val("bt_mac");
+    // "straszne 2/5" albo "brak"
+    const plNowM = this.val("playlist_now").match(/^(.*) (\d+)\/(\d+)$/);
+    const plSt = this.st("playlists");
 
     this.view.setModel({
       offline,
@@ -880,6 +1114,11 @@ class EspJblCard extends HTMLElement {
       heap: this.num("heap"),
       psram: this.num("psram"),
       cache: this.num("cache"),
+      playlists: (plSt && Array.isArray(plSt.attributes.playlists)) ? plSt.attributes.playlists : [],
+      playlist: plNowM ? plNowM[1] : "",
+      plPos: plNowM ? Number(plNowM[2]) : 0,
+      plLen: plNowM ? Number(plNowM[3]) : 0,
+      shuffle: this.val("shuffle") === "on",
     });
   }
 }
