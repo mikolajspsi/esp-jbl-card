@@ -134,6 +134,38 @@ const kb = (b) => (b >= 1048576 ? (b / 1048576).toFixed(2).replace(".", ",") + "
 const isError = (m) => /błąd|blad|error|nie można|nie ma /i.test(m || "");
 const isLoading = (m) => /pobieram|formatowanie/i.test(m || "");
 
+// Wysylanie pliku z postepem; Content-Type text/plain = zwykle zadanie CORS bez zapytania wstepnego
+function xhrUpload(url, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", url);
+    x.setRequestHeader("Content-Type", "text/plain");
+    x.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100));
+    x.onload = () => {
+      let body = {};
+      try {
+        body = JSON.parse(x.responseText);
+      } catch (e) {
+        /* odpowiedz bez JSON */
+      }
+      if (x.status >= 200 && x.status < 300 && body.ok !== false) resolve(body);
+      else reject(new Error(body.error || "HTTP " + x.status));
+    };
+    x.onerror = () =>
+      reject(new Error(location.protocol === "https:" && url.startsWith("http:")
+        ? "przeglądarka blokuje wysyłanie z HTTPS do ESP (HTTP) - użyj panelu ESP"
+        : "brak połączenia z ESP"));
+    x.send(file);
+  });
+}
+
+// 83000 -> "1:23", 3723000 -> "1:02:03"
+function fmtTime(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(mm).padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
+}
+
 function ensureFonts(doc = document) {
   if (doc.querySelector("link[data-esp-jbl-font]")) return;
   const l = doc.createElement("link");
@@ -156,8 +188,10 @@ class EspJblView {
     this.h = handlers;
     this.m = null;
     this.ui = { tab: "all", btOpen: false, sdOpen: false, confirmDelete: false, armedUntil: 0, cols: 1, dark: false,
-      plOpen: "", plConfirm: false, sheet: "", sheetPl: "" };
-    this.draft = { url: "", name: "", newUrl: "", mac: null, type: "auto", plName: "", plAdd: "", sheetNew: "" };
+      plOpen: "", plConfirm: false, sheet: "", sheetPl: "", addMode: "url" };
+    this.draft = { url: "", name: "", newUrl: "", mac: null, type: "auto", plName: "", plAdd: "", sheetNew: "", upName: "", file: null };
+    this.upload = null;   // { pct } w trakcie wysylania
+    this.localMsg = "";   // blad wysylania pokazywany zamiast komunikatu z ESP
     this.lastHtml = "";
     this.pending = false;
     this.busy = new Set();
@@ -168,6 +202,23 @@ class EspJblView {
     this.host.className = "ej-root";
     root.appendChild(style);
     root.appendChild(this.host);
+
+    // wybor pliku poza przerysowywanym widokiem - przerysowanie nie gubi wybranego pliku
+    this.fileInput = document.createElement("input");
+    this.fileInput.type = "file";
+    this.fileInput.accept = "audio/mpeg,.mp3";
+    this.fileInput.style.display = "none";
+    root.appendChild(this.fileInput);
+    this.fileInput.addEventListener("change", () => {
+      const f = this.fileInput.files && this.fileInput.files[0];
+      if (!f) return;
+      this.draft.file = f;
+      if (!this.draft.upName.trim()) {
+        this.draft.upName = f.name.replace(/\.[^.]+$/, "").replace(/\|/g, "").trim().replace(/\s+/g, "_").slice(0, 31);
+      }
+      this.fileInput.value = "";
+      this.render(true);
+    });
 
     this.host.addEventListener("click", (e) => this.onClick(e));
     this.host.addEventListener("change", (e) => this.onChange(e));
@@ -192,6 +243,7 @@ class EspJblView {
     this.timer = setInterval(() => {
       if (this.ui.armedUntil && Date.now() > this.ui.armedUntil) this.ui.armedUntil = 0;
       if (this.ui.armedUntil) this.render(true);
+      else if (this.m && this.m.playing && !this.m.offline) this.render(); // biegnacy czas utworu
     }, 500);
   }
 
@@ -356,8 +408,54 @@ class EspJblView {
         this.draft.type = t.dataset.type;
         this.render(true);
         break;
+      case "add-mode":
+        this.ui.addMode = t.dataset.mode;
+        this.render(true);
+        break;
+      case "pick-file":
+        this.fileInput.click();
+        break;
+      case "upload": {
+        const file = this.draft.file, name = this.draft.upName.trim();
+        if (!file || !name || this.upload) return;
+        this.upload = { pct: 0 };
+        this.localMsg = "";
+        this.render(true);
+        Promise.resolve()
+          .then(() => this.h.uploadFile(file, name, (pct) => {
+            this.upload = { pct };
+            this.render(true);
+          }))
+          .then(() => {
+            this.draft.file = null;
+            this.draft.upName = "";
+          })
+          .catch((err) => {
+            this.localMsg = "Błąd wysyłania: " + (err && err.message ? err.message : err);
+            setTimeout(() => {
+              this.localMsg = "";
+              this.render(true);
+            }, 10000);
+          })
+          .finally(() => {
+            this.upload = null;
+            this.render(true);
+          });
+        break;
+      }
+      case "prev":
+        this.run("prev", () => this.h.prev());
+        break;
+      case "resume":
+        this.run("resume", () => this.h.resume());
+        break;
       case "next":
         this.run("next", () => this.h.next());
+        break;
+      case "spk-buttons":
+        m.spkButtons = m.spkButtons === false;
+        this.render(true);
+        this.run("spk-buttons", () => this.h.setSpeakerButtons(m.spkButtons));
         break;
       case "shuffle":
         m.shuffle = !m.shuffle;
@@ -511,6 +609,11 @@ class EspJblView {
     else if (k === "newurl") this.draft.newUrl = t.value;
     else if (k === "mac") this.draft.mac = t.value;
     else if (k === "plname") this.draft.plName = t.value;
+    else if (k === "upname") {
+      this.draft.upName = t.value;
+      const b = this.host.querySelector('[data-act="upload"]');
+      if (b) b.disabled = !(this.draft.file && t.value.trim() && !this.upload);
+    }
     else if (k === "sheet-new") this.draft.sheetNew = t.value;
     else if (t.type === "range") this.paintRange(t);
     if (k === "name" || k === "newurl") {
@@ -526,6 +629,7 @@ class EspJblView {
     else if (k === "newurl" || k === "name") this.onClick({ target: this.host.querySelector('[data-act="save"]') });
     else if (k === "mac") e.target.blur();
     else if (k === "plname") this.onClick({ target: this.host.querySelector('[data-act="pl-create"]') });
+    else if (k === "upname") this.onClick({ target: this.host.querySelector('[data-act="upload"]') });
     else if (k === "sheet-new") this.onClick({ target: this.host.querySelector('[data-act="sheet-add"]') });
   }
 
@@ -636,8 +740,8 @@ class EspJblView {
     const devices = off ? [] : m.devices || [];
     const speaker = devices.find((d) => d.mac === m.mac);
     const armedLeft = ui.armedUntil ? Math.max(0, Math.ceil((ui.armedUntil - Date.now()) / 1000)) : 0;
-    const msg = off ? "Ostatni komunikat niedostępny (urządzenie offline)." : m.message || "Gotowe.";
-    const msgErr = !off && isError(m.message), msgLoad = !off && (isLoading(m.message) || m.sdBusy);
+    const msg = off ? "Ostatni komunikat niedostępny (urządzenie offline)." : this.localMsg || m.message || "Gotowe.";
+    const msgErr = !off && isError(msg), msgLoad = !off && (isLoading(msg) || m.sdBusy);
 
     let nowTitle = "Cisza", nowSub = "Nic nie jest odtwarzane", nowIcon = "volume-off";
     if (off) [nowTitle, nowSub, nowIcon] = [DASH, "Encja niedostępna", "help-circle-outline"];
@@ -647,6 +751,40 @@ class EspJblView {
     else if (!bt) [nowSub, nowIcon] = ["Brak połączenia z głośnikiem", "bluetooth-off"];
     else if (m.sdBusy) nowSub = "Trwa pobieranie plików na kartę";
     if (playing && m.playlist) nowSub = `Playlista: ${m.playlist} · ${m.plPos}/${m.plLen}`;
+
+    // czas: stan z urzadzenia + czas od ostatniej aktualizacji
+    const since = m.posAt ? Math.max(0, Date.now() - m.posAt) : 0;
+    const pos = playing ? (m.posMs || 0) + since : 0;
+    const dur = m.durMs > 0 ? m.durMs : 0;
+    const shownPos = dur ? Math.min(pos, dur) : pos;
+    let timeBlock = "";
+    if (playing && dur) {
+      timeBlock = `<div style="display:grid;gap:6px">
+      <span class="bar"><i style="width:${((shownPos / dur) * 100).toFixed(1)}%;transition:width .5s linear"></i></span>
+      <div class="scale mono" style="font-size:11.5px"><span>${fmtTime(shownPos)}</span><span>−${fmtTime(dur - shownPos)}</span><span>${fmtTime(dur)}</span></div>
+    </div>`;
+    } else if (playing) {
+      timeBlock = `<div class="scale mono" style="font-size:11.5px;justify-content:flex-start;gap:6px;align-items:center">
+      ${I(radioNow ? "access-point" : "timer-outline", 14, "var(--accent)")}<span>${radioNow ? "na żywo" : "czas"} · ${fmtTime(pos)}</span></div>`;
+    }
+    if (playing && m.playlist && m.plTotalMs > 0) {
+      const ap = m.plApprox ? "~" : "";
+      timeBlock += `<div class="scale mono" style="font-size:11.5px;justify-content:flex-start;gap:8px;align-items:center">
+      ${I("playlist-play", 14, "var(--dim)")}<span>Całość ${ap}${fmtTime(m.plTotalMs)}</span><span>· zostało ${ap}${fmtTime(Math.max(0, (m.plLeftMs || 0) - since))}</span></div>`;
+    }
+
+    const up = this.upload;
+    const fileForm = `<button class="field${off || !m.sdReady ? " disabled" : ""}" data-act="pick-file" style="width:100%;text-align:left">
+      ${I("file-music-outline", 20, "var(--accent)")}
+      <span style="min-width:0;flex:1"><span class="label">Plik MP3 z urządzenia</span>
+      <span class="ell" style="display:block;font-size:13.5px;${this.draft.file ? "font-weight:600" : "color:var(--dim)"}">${esc(this.draft.file ? `${this.draft.file.name} · ${kb(this.draft.file.size)}` : "Wybierz plik…")}</span></span>
+      ${I("folder-open-outline", 20, "var(--dim)")}</button>
+    <label class="field" style="display:block"><span class="label">Nazwa</span>
+      <input data-key="upname" maxlength="31" placeholder="np. duch_wycie" value="${esc(this.draft.upName)}"></label>
+    ${!off && !m.sdReady ? `<div style="font-size:12px;color:var(--danger)">Wgrywanie wymaga karty SD w ESP.</div>` : ""}
+    <button class="primary" data-act="upload"${this.draft.file && this.draft.upName.trim() && !up && m.sdReady && !off ? "" : " disabled"}>
+      ${I("upload", 20)}${up ? `Wysyłanie… ${up.pct}%` : "Wyślij na kartę SD"}</button>
+    ${up ? progressBar(up.pct, "") : ""}`;
 
     const btText = off ? "brak danych" : bt ? (speaker ? speaker.name + " · połączony" : "połączony") : "rozłączony";
     const sdSummary = off ? DASH : !m.sdReady ? "brak karty" : m.sdBusy ? (m.sdPct >= 0 ? `pobieranie ${m.sdPct}%` : "pobieranie…") :
@@ -673,10 +811,15 @@ ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-wei
       </div>
     </div>
   </div>
+  ${timeBlock}
   <div style="display:flex;gap:8px">
-    <button class="stop${ctl}" data-act="stop" style="flex:1;background:var(${playing ? "--accent" : "--chip"});color:var(${playing ? "--on-accent" : "--dim"});border:1px solid var(${playing ? "--accent" : "--divider"})">
-      ${I("stop-circle-outline", 24)}Stop</button>
-    ${playing && m.playlist ? `<button class="stop${ctl}" data-act="next" aria-label="Następny" title="Następny"
+    ${playing ? `<button class="stop${ctl}" data-act="prev" aria-label="Poprzedni" title="Poprzedni"
+      style="flex:0 0 58px;width:58px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent)">${I("skip-previous", 28)}</button>` : ""}
+    ${playing ? `<button class="stop${ctl}" data-act="stop" style="flex:1;background:var(--accent);color:var(--on-accent);border:1px solid var(--accent)">
+      ${I("stop-circle-outline", 24)}Stop</button>`
+    : `<button class="stop${ctl}" data-act="resume" style="flex:1;background:var(--chip);color:var(--ink);border:1px solid var(--divider)">
+      ${I("play-circle-outline", 24)}Wznów</button>`}
+    ${playing ? `<button class="stop${ctl}" data-act="next" aria-label="Następny" title="Następny"
       style="flex:0 0 58px;width:58px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent)">${I("skip-next", 28)}</button>` : ""}
   </div>
   <div class="${ctl}" style="display:grid;gap:8px">
@@ -780,6 +923,11 @@ ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-wei
 
 <div class="panel" style="gap:10px">
   <span class="title">${I("plus-box-multiple-outline", 20, "var(--accent)")}Dodaj dźwięk / stację</span>
+  <div class="tabs">
+    ${[["url", "Z linku", "link-variant"], ["file", "Z pliku", "file-upload-outline"]].map(([k, l, ic]) =>
+      `<button data-act="add-mode" data-mode="${k}" class="${ui.addMode === k ? "on" : ""}" style="display:inline-flex;align-items:center;justify-content:center;gap:6px">${I(ic, 17)}${l}</button>`).join("")}
+  </div>
+  ${ui.addMode === "file" ? fileForm : `
   <div style="display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
     <label class="field" style="display:block"><span class="label">Nazwa</span>
       <input data-key="name" maxlength="31" placeholder="np. duch_wycie" value="${esc(this.draft.name)}"></label>
@@ -792,7 +940,7 @@ ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-wei
         style="display:inline-flex;align-items:center;justify-content:center;gap:6px">${I(ic, 17)}${l}</button>`).join("")}
   </div>
   ${this.draft.type === "auto" ? `<div style="font-size:11.5px;color:var(--dim);margin-top:-4px">ESP sprawdzi link: transmisja na żywo → Radio, plik → Efekt.</div>` : ""}
-  <button class="primary" data-act="save"${this.draft.name.trim() && this.draft.newUrl.trim() && !off ? "" : " disabled"}>${I("content-save-outline", 20)}Zapisz dźwięk</button>
+  <button class="primary" data-act="save"${this.draft.name.trim() && this.draft.newUrl.trim() && !off ? "" : " disabled"}>${I("content-save-outline", 20)}Zapisz dźwięk</button>`}
   <div class="toast" style="background:var(${msgErr ? "--danger-soft" : "--chip"});border:1px solid var(${msgErr ? "--danger-line" : "--divider"})">
     <div style="display:flex;gap:9px;align-items:flex-start">
       ${I(msgErr ? "alert-circle-outline" : msgLoad ? "progress-download" : off ? "help-circle-outline" : "check-circle-outline", 18,
@@ -818,6 +966,10 @@ ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-wei
     </span>
   </button>
   ${ui.btOpen ? `<div style="display:grid;gap:10px">
+    <button class="toggle${off ? " disabled" : ""}" data-act="spk-buttons" role="switch" aria-checked="${m.spkButtons !== false}">
+      <span style="display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;text-align:left">${I("gesture-tap-button", 20, m.spkButtons !== false ? "var(--accent)" : "var(--dim)")}Przyciski głośnika sterują ESP</span>
+      <span class="switch" style="flex:0 0 auto;background:var(${m.spkButtons !== false ? "--accent" : "--divider"})"><i style="left:${m.spkButtons !== false ? 23 : 3}px"></i></span>
+    </button>
     <div style="display:flex;gap:8px;align-items:center">
       <button class="outline${off || m.scanning ? " disabled" : ""}" data-act="scan">${I("bluetooth-settings", 19)}${m.scanning ? "Skanowanie…" : "Skanuj"}</button>
       <span class="mono" style="flex:0 0 auto;font-size:12.5px;color:var(--dim)">${off ? DASH : m.scanning ? "skanowanie…" : "znaleziono " + devices.length}</span>
@@ -913,7 +1065,7 @@ function eqRow(key, label, v, off, I) {
 }
 
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 
 // Klucz -> [domena, sufiks encji]. Identyfikator = domena.<prefix>_<sufiks>
 const ENTITIES = {
@@ -948,6 +1100,9 @@ const ENTITIES = {
   playlist_now: ["sensor", "playlista_teraz"],
   shuffle: ["switch", "losowo"],
   next: ["button", "nastepny"],
+  prev: ["button", "poprzedni"],
+  playpause: ["button", "odtwarzaj_pauza"],
+  spk_buttons: ["switch", "przyciski_glosnika_steruja_esp"],
 };
 
 const BAD = ["unavailable", "unknown", "none", ""];
@@ -1003,6 +1158,12 @@ class EspJblCard extends HTMLElement {
     return this._hass.callService("mqtt", "publish", { topic: `${prefix}/${topic}`, payload: String(payload) });
   }
 
+  // adres ESP do wysylania plikow: z konfiguracji albo z atrybutow statusu
+  espHost() {
+    const st = this.st("playing");
+    return this.config.esp_host || (st && st.attributes.ip) || "";
+  }
+
   press(key) {
     return this.call("button", "press", key);
   }
@@ -1053,6 +1214,14 @@ class EspJblCard extends HTMLElement {
         sdFormatPress: () => this.press("sd_format"),
         playPlaylist: (name) => this.mqtt("playlist/play", name),
         next: () => this.press("next"),
+        prev: () => this.press("prev"),
+        resume: () => this.press("playpause"),
+        setSpeakerButtons: (on) => this.call("switch", on ? "turn_on" : "turn_off", "spk_buttons"),
+        uploadFile: (file, name, onProgress) => {
+          const host = this.espHost();
+          if (!host) return Promise.reject(new Error("nieznany adres ESP - ustaw esp_host w konfiguracji karty"));
+          return xhrUpload(`http://${host}/api/upload?name=${encodeURIComponent(name)}`, file, onProgress);
+        },
         setShuffle: (on) => this.call("switch", on ? "turn_on" : "turn_off", "shuffle"),
         createPlaylist: (name) => this.mqtt("playlist/create", name),
         addToPlaylist: (pl, sound) => this.mqtt("playlist/add", `${pl}|${sound}`),
@@ -1089,6 +1258,8 @@ class EspJblCard extends HTMLElement {
     // "straszne 2/5" albo "brak"
     const plNowM = this.val("playlist_now").match(/^(.*) (\d+)\/(\d+)$/);
     const plSt = this.st("playlists");
+    const playSt = this.st("playing");
+    const pa = (playSt && playSt.attributes) || {};
 
     this.view.setModel({
       offline,
@@ -1119,6 +1290,13 @@ class EspJblCard extends HTMLElement {
       plPos: plNowM ? Number(plNowM[2]) : 0,
       plLen: plNowM ? Number(plNowM[3]) : 0,
       shuffle: this.val("shuffle") === "on",
+      spkButtons: this.st("spk_buttons") ? this.val("spk_buttons") === "on" : true,
+      posMs: pa.pos_ms,
+      durMs: pa.dur_ms,
+      plTotalMs: pa.pl_total_ms,
+      plLeftMs: pa.pl_left_ms,
+      plApprox: !!pa.pl_approx,
+      posAt: playSt ? Date.parse(playSt.last_updated) : 0,
     });
   }
 }

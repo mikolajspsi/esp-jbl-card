@@ -1,4 +1,4 @@
-import { EspJblView, ensureFonts } from "./core.js";
+import { EspJblView, ensureFonts, xhrUpload } from "./core.js";
 
 const VERSION = "__VERSION__";
 
@@ -35,6 +35,9 @@ const ENTITIES = {
   playlist_now: ["sensor", "playlista_teraz"],
   shuffle: ["switch", "losowo"],
   next: ["button", "nastepny"],
+  prev: ["button", "poprzedni"],
+  playpause: ["button", "odtwarzaj_pauza"],
+  spk_buttons: ["switch", "przyciski_glosnika_steruja_esp"],
 };
 
 const BAD = ["unavailable", "unknown", "none", ""];
@@ -90,6 +93,12 @@ class EspJblCard extends HTMLElement {
     return this._hass.callService("mqtt", "publish", { topic: `${prefix}/${topic}`, payload: String(payload) });
   }
 
+  // adres ESP do wysylania plikow: z konfiguracji albo z atrybutow statusu
+  espHost() {
+    const st = this.st("playing");
+    return this.config.esp_host || (st && st.attributes.ip) || "";
+  }
+
   press(key) {
     return this.call("button", "press", key);
   }
@@ -140,6 +149,14 @@ class EspJblCard extends HTMLElement {
         sdFormatPress: () => this.press("sd_format"),
         playPlaylist: (name) => this.mqtt("playlist/play", name),
         next: () => this.press("next"),
+        prev: () => this.press("prev"),
+        resume: () => this.press("playpause"),
+        setSpeakerButtons: (on) => this.call("switch", on ? "turn_on" : "turn_off", "spk_buttons"),
+        uploadFile: (file, name, onProgress) => {
+          const host = this.espHost();
+          if (!host) return Promise.reject(new Error("nieznany adres ESP - ustaw esp_host w konfiguracji karty"));
+          return xhrUpload(`http://${host}/api/upload?name=${encodeURIComponent(name)}`, file, onProgress);
+        },
         setShuffle: (on) => this.call("switch", on ? "turn_on" : "turn_off", "shuffle"),
         createPlaylist: (name) => this.mqtt("playlist/create", name),
         addToPlaylist: (pl, sound) => this.mqtt("playlist/add", `${pl}|${sound}`),
@@ -176,6 +193,8 @@ class EspJblCard extends HTMLElement {
     // "straszne 2/5" albo "brak"
     const plNowM = this.val("playlist_now").match(/^(.*) (\d+)\/(\d+)$/);
     const plSt = this.st("playlists");
+    const playSt = this.st("playing");
+    const pa = (playSt && playSt.attributes) || {};
 
     this.view.setModel({
       offline,
@@ -206,6 +225,13 @@ class EspJblCard extends HTMLElement {
       plPos: plNowM ? Number(plNowM[2]) : 0,
       plLen: plNowM ? Number(plNowM[3]) : 0,
       shuffle: this.val("shuffle") === "on",
+      spkButtons: this.st("spk_buttons") ? this.val("spk_buttons") === "on" : true,
+      posMs: pa.pos_ms,
+      durMs: pa.dur_ms,
+      plTotalMs: pa.pl_total_ms,
+      plLeftMs: pa.pl_left_ms,
+      plApprox: !!pa.pl_approx,
+      posAt: playSt ? Date.parse(playSt.last_updated) : 0,
     });
   }
 }

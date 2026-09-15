@@ -1,4 +1,4 @@
-import { EspJblView, ensureFonts } from "./core.js";
+import { EspJblView, ensureFonts, xhrUpload } from "./core.js";
 
 // Panel WWW serwowany przez ESP: stan z /api/state, komendy przez /api/cmd/<temat MQTT>
 const POLL_MS = 1500;
@@ -39,7 +39,15 @@ const view = new EspJblView(root, {
     sdSync: () => cmd("sd/sync"),
     sdFormatPress: () => cmd("sd/format"),
     playPlaylist: (name) => cmd("playlist/play", name),
-    next: () => cmd("next"),
+    next: () => cmd("media/next"),
+    prev: () => cmd("media/prev"),
+    resume: () => cmd("media/playpause"),
+    setSpeakerButtons: (on) => cmd("speaker/buttons/set", on ? "ON" : "OFF"),
+    uploadFile: (file, name, onProgress) =>
+      xhrUpload(`/api/upload?name=${encodeURIComponent(name)}`, file, onProgress).then((r) => {
+        setTimeout(poll, 300);
+        return r;
+      }),
     setShuffle: (on) => cmd("shuffle/set", on ? "ON" : "OFF"),
     createPlaylist: (name) => cmd("playlist/create", name),
     addToPlaylist: (pl, sound) => cmd("playlist/add", `${pl}|${sound}`),
@@ -93,6 +101,13 @@ async function poll() {
       plPos: s.pl_pos,
       plLen: s.pl_len,
       shuffle: s.shuffle,
+      spkButtons: s.spk_buttons,
+      posMs: s.pos_ms,
+      durMs: s.dur_ms,
+      plTotalMs: s.pl_total_ms,
+      plLeftMs: s.pl_left_ms,
+      plApprox: s.pl_approx,
+      posAt: Date.now(),
     };
     const ip = document.getElementById("ip");
     if (ip) ip.textContent = (s.ip || location.host) + (s.mqtt ? "" : " · MQTT offline");
