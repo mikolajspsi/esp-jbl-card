@@ -860,7 +860,7 @@ window.customCards.push({
   name: "ESP JBL",
   description: "Sterowanie ESP32 z głośnikiem Bluetooth: dźwięki, radio, brzmienie, karta SD.",
   preview: false,
-  documentationURL: "https://github.com/OWNER/esp-jbl-card",
+  documentationURL: "https://github.com/mikolajspsi/esp-jbl-card",
 });
 console.info(`%c ESP-JBL-CARD %c ${VERSION} `, "background:#e8620a;color:#fff;font-weight:700", "background:#1c1f24;color:#fff");
 
