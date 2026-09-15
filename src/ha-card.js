@@ -16,6 +16,7 @@ const ENTITIES = {
   delete_selected: ["button", "usun_wybrany"],
   form_name: ["text", "nowy_dzwiek_nazwa"],
   form_url: ["text", "nowy_dzwiek_url"],
+  form_type: ["select", "nowy_dzwiek_kategoria"],
   form_save: ["button", "zapisz_dzwiek"],
   message: ["sensor", "komunikat"],
   bass: ["number", "bas"],
@@ -110,7 +111,12 @@ class EspJblCard extends HTMLElement {
           await this.call("select", "select_option", "select", { option: name });
           await this.press("delete_selected");
         },
-        addSound: async (name, url) => {
+        addSound: async (name, url, type) => {
+          // encja kategorii istnieje od firmware z kategoriami
+          if (this.st("form_type")) {
+            const option = type === "radio" ? "Radio" : type === "efekt" ? "Efekt" : "Auto";
+            await this.call("select", "select_option", "form_type", { option });
+          }
           await text("form_name", name);
           await text("form_url", url);
           await this.press("form_save");
@@ -136,6 +142,7 @@ class EspJblCard extends HTMLElement {
 
     const soundsSt = this.st("sounds");
     const sounds = (soundsSt && Array.isArray(soundsSt.attributes.sounds)) ? soundsSt.attributes.sounds : [];
+    const typeList = (soundsSt && Array.isArray(soundsSt.attributes.types)) ? soundsSt.attributes.types : [];
     const devSt = this.st("bt_devices");
     const devices = ((devSt && devSt.attributes.devices) || []).map((line) => {
       const p = String(line).split("|").map((x) => x.trim());
@@ -156,6 +163,7 @@ class EspJblCard extends HTMLElement {
       volume: Math.round(this.num("volume") ?? 0),
       loop: this.val("loop") === "on",
       sounds,
+      types: Object.fromEntries(sounds.map((n, i) => [n, typeList[i]]).filter(([, t]) => t)),
       selected: sounds.includes(selected) ? selected : "",
       message: BAD.includes(message) ? "" : message,
       bass: Math.round(this.num("bass") ?? 0),

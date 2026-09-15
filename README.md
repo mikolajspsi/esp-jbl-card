@@ -39,9 +39,9 @@ entities:
   volume: number.esp_jbl_glosnosc_2
 ```
 
-Klucze w `entities`: `playing`, `bt`, `stop`, `volume`, `loop`, `sounds`, `play_url`, `select`, `play_selected`, `delete_selected`, `form_name`, `form_url`, `form_save`, `message`, `bass`, `treble`, `bt_scan`, `bt_devices`, `bt_mac`, `sd`, `sd_sync`, `sd_format`, `rssi`, `heap`, `psram`, `cache`.
+Klucze w `entities`: `playing`, `bt`, `stop`, `volume`, `loop`, `sounds`, `play_url`, `select`, `play_selected`, `delete_selected`, `form_name`, `form_url`, `form_type`, `form_save`, `message`, `bass`, `treble`, `bt_scan`, `bt_devices`, `bt_mac`, `sd`, `sd_sync`, `sd_format`, `rssi`, `heap`, `psram`, `cache`.
 
-Pozycja jest traktowana jako **stacja radiowa**, gdy jej nazwa zaczyna się od `radio_` albo zawiera `fm`.
+Kategorię wybierasz przy dodawaniu: **Auto** (domyślnie), **Efekt** albo **Radio**. W trybie Auto ESP sam otwiera link: transmisja na żywo (bez rozmiaru pliku) staje się radiem, zwykły plik — efektem. Stacje nie są pobierane na kartę SD, grają z sieci. Dźwięki dodane przed wprowadzeniem kategorii ESP rozpoznaje przy synchronizacji karty albo przy pierwszym odtworzeniu.
 
 ## Panel WWW na ESP
 

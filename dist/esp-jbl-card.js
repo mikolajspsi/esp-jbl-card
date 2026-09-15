@@ -156,7 +156,7 @@ class EspJblView {
     this.h = handlers;
     this.m = null;
     this.ui = { tab: "all", btOpen: false, sdOpen: false, confirmDelete: false, armedUntil: 0, cols: 1, dark: false };
-    this.draft = { url: "", name: "", newUrl: "", mac: null };
+    this.draft = { url: "", name: "", newUrl: "", mac: null, type: "auto" };
     this.lastHtml = "";
     this.pending = false;
     this.busy = new Set();
@@ -327,16 +327,21 @@ class EspJblView {
         this.render(true);
         break;
       case "save": {
-        const name = this.draft.name.trim(), url = this.draft.newUrl.trim();
+        const name = this.draft.name.trim(), url = this.draft.newUrl.trim(), type = this.draft.type;
         if (!name || !url) return;
         this.run("save", async () => {
-          await this.h.addSound(name, url);
+          await this.h.addSound(name, url, type);
           this.draft.name = "";
           this.draft.newUrl = "";
+          this.draft.type = "auto";
           this.render(true);
         });
         break;
       }
+      case "type":
+        this.draft.type = t.dataset.type;
+        this.render(true);
+        break;
       case "reset-bass":
         m.bass = 0;
         this.render(true);
@@ -453,14 +458,16 @@ class EspJblView {
   // ---------- widok ----------
   html() {
     const m = this.m, ui = this.ui, I = this.icon;
+    // kategoria z urzadzenia; starsze firmware bez kategorii - zgadywanie po nazwie
+    const radioOf = (n) => (m.types && m.types[n] ? m.types[n] === "radio" : isRadio(n));
     const off = !!m.offline;
     const bt = !off && m.btStreaming;
     const playing = !off && !!m.playing;
-    const radioNow = playing && isRadio(m.playing);
+    const radioNow = playing && radioOf(m.playing);
     const ctl = bt ? "" : " disabled";
     const sounds = off ? [] : m.sounds || [];
-    const radios = sounds.filter(isRadio).length;
-    const shown = sounds.filter((n) => (ui.tab === "radio" ? isRadio(n) : ui.tab === "fx" ? !isRadio(n) : true));
+    const radios = sounds.filter(radioOf).length;
+    const shown = sounds.filter((n) => (ui.tab === "radio" ? radioOf(n) : ui.tab === "fx" ? !radioOf(n) : true));
     const devices = off ? [] : m.devices || [];
     const speaker = devices.find((d) => d.mac === m.mac);
     const armedLeft = ui.armedUntil ? Math.max(0, Math.ceil((ui.armedUntil - Date.now()) / 1000)) : 0;
@@ -528,7 +535,7 @@ ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-wei
       .map(([k, l]) => `<button data-act="tab" data-tab="${k}" class="${ui.tab === k ? "on" : ""}">${l}</button>`).join("")}
   </div>
   ${sounds.length ? `<div class="grid-s${ctl}">${shown.map((n) => {
-      const r = isRadio(n), on = n === m.playing;
+      const r = radioOf(n), on = n === m.playing;
       return `<button class="tile${on ? " on" : ""}" data-act="sound" data-sound="${esc(n)}" title="Przytrzymaj, aby usunąć">
         ${I(r ? "radio-tower" : "ghost-outline", 20, r ? "var(--accent)" : "var(--ink)")}
         <span style="min-width:0"><span class="t1 ell">${esc(pretty(n))}</span><span class="t2 mono ell">${esc(n)}</span></span></button>`;
@@ -566,6 +573,12 @@ ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-wei
     <label class="field" style="display:block"><span class="label">URL</span>
       <input class="mono" data-key="newurl" type="url" inputmode="url" maxlength="255" placeholder="https://…/wycie.mp3" value="${esc(this.draft.newUrl)}"></label>
   </div>
+  <div class="tabs" role="radiogroup" aria-label="Kategoria">
+    ${[["auto", "Auto", "auto-fix"], ["efekt", "Efekt", "ghost-outline"], ["radio", "Radio", "radio-tower"]].map(([k, l, ic]) =>
+      `<button data-act="type" data-type="${k}" class="${this.draft.type === k ? "on" : ""}" role="radio" aria-checked="${this.draft.type === k}"
+        style="display:inline-flex;align-items:center;justify-content:center;gap:6px">${I(ic, 17)}${l}</button>`).join("")}
+  </div>
+  ${this.draft.type === "auto" ? `<div style="font-size:11.5px;color:var(--dim);margin-top:-4px">ESP sprawdzi link: transmisja na żywo → Radio, plik → Efekt.</div>` : ""}
   <button class="primary" data-act="save"${this.draft.name.trim() && this.draft.newUrl.trim() && !off ? "" : " disabled"}>${I("content-save-outline", 20)}Zapisz dźwięk</button>
   <div class="toast" style="background:var(${msgErr ? "--danger-soft" : "--chip"});border:1px solid var(${msgErr ? "--danger-line" : "--divider"})">
     <div style="display:flex;gap:9px;align-items:flex-start">
@@ -687,7 +700,7 @@ function eqRow(key, label, v, off, I) {
 }
 
 
-const VERSION = "1.0.1";
+const VERSION = "1.0.2";
 
 // Klucz -> [domena, sufiks encji]. Identyfikator = domena.<prefix>_<sufiks>
 const ENTITIES = {
@@ -703,6 +716,7 @@ const ENTITIES = {
   delete_selected: ["button", "usun_wybrany"],
   form_name: ["text", "nowy_dzwiek_nazwa"],
   form_url: ["text", "nowy_dzwiek_url"],
+  form_type: ["select", "nowy_dzwiek_kategoria"],
   form_save: ["button", "zapisz_dzwiek"],
   message: ["sensor", "komunikat"],
   bass: ["number", "bas"],
@@ -797,7 +811,12 @@ class EspJblCard extends HTMLElement {
           await this.call("select", "select_option", "select", { option: name });
           await this.press("delete_selected");
         },
-        addSound: async (name, url) => {
+        addSound: async (name, url, type) => {
+          // encja kategorii istnieje od firmware z kategoriami
+          if (this.st("form_type")) {
+            const option = type === "radio" ? "Radio" : type === "efekt" ? "Efekt" : "Auto";
+            await this.call("select", "select_option", "form_type", { option });
+          }
           await text("form_name", name);
           await text("form_url", url);
           await this.press("form_save");
@@ -823,6 +842,7 @@ class EspJblCard extends HTMLElement {
 
     const soundsSt = this.st("sounds");
     const sounds = (soundsSt && Array.isArray(soundsSt.attributes.sounds)) ? soundsSt.attributes.sounds : [];
+    const typeList = (soundsSt && Array.isArray(soundsSt.attributes.types)) ? soundsSt.attributes.types : [];
     const devSt = this.st("bt_devices");
     const devices = ((devSt && devSt.attributes.devices) || []).map((line) => {
       const p = String(line).split("|").map((x) => x.trim());
@@ -843,6 +863,7 @@ class EspJblCard extends HTMLElement {
       volume: Math.round(this.num("volume") ?? 0),
       loop: this.val("loop") === "on",
       sounds,
+      types: Object.fromEntries(sounds.map((n, i) => [n, typeList[i]]).filter(([, t]) => t)),
       selected: sounds.includes(selected) ? selected : "",
       message: BAD.includes(message) ? "" : message,
       bass: Math.round(this.num("bass") ?? 0),
