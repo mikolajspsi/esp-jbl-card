@@ -476,9 +476,9 @@ class EspJblView {
     else if (m.sdBusy) nowSub = "Trwa pobieranie plików na kartę";
 
     const btText = off ? "brak danych" : bt ? (speaker ? speaker.name + " · połączony" : "połączony") : "rozłączony";
-    const sdSummary = off ? DASH : !m.sdReady ? "brak karty" : m.sdBusy ? "pobieranie…" :
+    const sdSummary = off ? DASH : !m.sdReady ? "brak karty" : m.sdBusy ? (m.sdPct >= 0 ? `pobieranie ${m.sdPct}%` : "pobieranie…") :
       `${m.sdFree} MB${m.rssi ? " · " + String(m.rssi).replace("-", "−") + " dBm" : ""}`;
-    const sdState = off ? DASH : !m.sdReady ? "brak karty" : (m.sdBusy ? "pobieranie… · " : "") + m.sdFree + " MB wolne";
+    const sdState = off ? DASH : !m.sdReady ? "brak karty" : (m.sdBusy ? `pobieranie${m.sdJob ? " " + m.sdJob : ""}${m.sdPct >= 0 ? " " + m.sdPct + "%" : "…"} · ` : "") + m.sdFree + " MB wolne";
 
     return `<div class="ej${ui.cols === 2 ? " cols2" : ""}">
 ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-weight:700;font-size:14px">Urządzenie offline</div>
@@ -573,7 +573,7 @@ ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-wei
         msgErr ? "var(--danger)" : msgLoad ? "var(--accent)" : off ? "var(--dim)" : "var(--ok)")}
       <span style="font-size:12.5px">${esc(msg)}</span>
     </div>
-    ${msgLoad ? `<span class="bar"><i class="indet"></i></span>` : ""}
+    ${msgLoad ? progressBar(m.sdBusy ? m.sdPct : -1, "") : ""}
   </div>
 </div>
 
@@ -630,7 +630,7 @@ ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-wei
     <div class="box">
       <div class="row"><span style="font-size:13px;color:var(--dim);font-weight:600">Stan karty</span>
         <span class="mono" style="font-size:13px;font-weight:600;color:var(${msgErr ? "--danger" : "--ink"})">${esc(sdState)}</span></div>
-      ${m.sdBusy ? `<span class="bar" style="background:var(--divider)"><i class="indet"></i></span>` : ""}
+      ${m.sdBusy ? progressBar(m.sdPct, "background:var(--divider)") : ""}
       <button class="ghostbtn${off || !m.sdReady ? " disabled" : ""}" data-act="sd-sync">${I("download-outline", 19, "var(--accent)")}Pobierz brakujące na kartę</button>
     </div>
     <div class="danger-zone">
@@ -652,6 +652,12 @@ ${off ? `<div class="banner">${I("lan-disconnect", 20)}<div><div style="font-wei
 </div>
 </div>`;
   }
+}
+
+// pasek postepu: znany procent albo animacja, gdy rozmiar nieznany
+function progressBar(pct, style) {
+  const fill = pct >= 0 ? `<i style="width:${pct}%;transition:width .4s"></i>` : `<i class="indet"></i>`;
+  return `<span class="bar" style="${style}">${fill}</span>`;
 }
 
 function fillTrack(v) {
@@ -681,7 +687,7 @@ function eqRow(key, label, v, off, I) {
 }
 
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 
 // Klucz -> [domena, sufiks encji]. Identyfikator = domena.<prefix>_<sufiks>
 const ENTITIES = {
@@ -824,6 +830,8 @@ class EspJblCard extends HTMLElement {
     });
     const sd = this.val("sd");
     const sdFree = (sd.match(/(-?\d+)\s*MB/) || [])[1];
+    // "pobieranie halloween 35% · 30185 MB wolne"
+    const sdJobM = sd.match(/^pobieranie\s*(.*?)(?:\s+(\d+)%)?\s*·/);
     const selected = this.val("select");
     const message = this.val("message");
     const mac = this.val("bt_mac");
@@ -845,6 +853,8 @@ class EspJblCard extends HTMLElement {
       sdReady: !BAD.includes(sd) && sd !== "brak karty",
       sdBusy: sd.startsWith("pobieranie"),
       sdFree: sdFree != null ? Number(sdFree) : 0,
+      sdJob: sdJobM ? sdJobM[1] : "",
+      sdPct: sdJobM && sdJobM[2] != null ? Number(sdJobM[2]) : -1,
       rssi: this.num("rssi"),
       heap: this.num("heap"),
       psram: this.num("psram"),

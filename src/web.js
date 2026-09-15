@@ -73,6 +73,8 @@ async function poll() {
       sdReady: s.sd_ready,
       sdBusy: s.sd_busy,
       sdFree: s.sd_free_mb,
+      sdJob: s.sd_job || "",
+      sdPct: s.sd_pct ?? -1,
       rssi: s.rssi,
       heap: s.heap,
       psram: s.psram,

@@ -143,6 +143,8 @@ class EspJblCard extends HTMLElement {
     });
     const sd = this.val("sd");
     const sdFree = (sd.match(/(-?\d+)\s*MB/) || [])[1];
+    // "pobieranie halloween 35% · 30185 MB wolne"
+    const sdJobM = sd.match(/^pobieranie\s*(.*?)(?:\s+(\d+)%)?\s*·/);
     const selected = this.val("select");
     const message = this.val("message");
     const mac = this.val("bt_mac");
@@ -164,6 +166,8 @@ class EspJblCard extends HTMLElement {
       sdReady: !BAD.includes(sd) && sd !== "brak karty",
       sdBusy: sd.startsWith("pobieranie"),
       sdFree: sdFree != null ? Number(sdFree) : 0,
+      sdJob: sdJobM ? sdJobM[1] : "",
+      sdPct: sdJobM && sdJobM[2] != null ? Number(sdJobM[2]) : -1,
       rssi: this.num("rssi"),
       heap: this.num("heap"),
       psram: this.num("psram"),
