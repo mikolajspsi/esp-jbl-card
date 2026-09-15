@@ -1,0 +1,6 @@
+{
+  "name": "ESP JBL Card",
+  "filename": "esp-jbl-card.js",
+  "render_readme": true,
+  "homeassistant": "2024.1.0"
+}

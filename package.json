@@ -1,0 +1,10 @@
+{
+  "name": "esp-jbl-card",
+  "version": "1.0.0",
+  "description": "Karta Lovelace dla ESP JBL (ESP32 + głośnik Bluetooth)",
+  "repository": "OWNER/esp-jbl-card",
+  "license": "MIT",
+  "scripts": {
+    "build": "python build.py"
+  }
+}
